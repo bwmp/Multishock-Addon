@@ -1,0 +1,6 @@
+{
+  "watch": ["src"],
+  "ext": "py",
+  "ignore": [],
+  "exec": "python src/main.py"
+}
