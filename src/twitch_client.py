@@ -28,6 +28,7 @@ class TwitchClient:
 
     async def connect_to_wss(self):
         uri = self.websocket_url
+        self.channel_id = await self.get_channel_id()
         valid_token, expiration_timestamp = await self.is_token_valid()
         if not valid_token:
             return
@@ -38,6 +39,10 @@ class TwitchClient:
                 await self.listen_to_websocket()
         except websockets.ConnectionClosed:
             await self.on_disconnect()
+
+    async def close(self):
+        if self.websocket:
+            await self.websocket.close()
 
     async def reconnect_to_wss(self):
         await self.websocket.close()
@@ -104,7 +109,7 @@ class TwitchClient:
                 headers=headers,
                 json=payload,
             ) as resp:
-                print(resp.status)
+                print("got response", resp.status)
 
     async def is_token_valid(self):
         url = f"https://id.twitch.tv/oauth2/validate"
@@ -114,7 +119,6 @@ class TwitchClient:
             async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     response_json = await resp.json()
-                    print(response_json)
                     if "expires_in" in response_json:
                         expiration_timestamp = time.time() + response_json["expires_in"]
                         self.expires_at = expiration_timestamp
@@ -141,11 +145,3 @@ class TwitchClient:
                 data = await resp.json()
                 self.channel_id = data["data"][0]["id"]
                 return self.channel_id
-
-    async def update_token_and_channel(self, new_token, new_channel):
-        self.channel_username = new_channel
-        self.oauth_token = new_token
-        await self.get_channel_id()
-        if self.websocket:
-            await self.websocket.close()
-        await self.connect_to_wss()

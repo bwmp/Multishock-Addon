@@ -22,6 +22,11 @@ class TwitchChatClient:
         await self.join_channel()
         await self.listen_to_chat(reader)
 
+    async def close(self):
+        if self.writer:
+            self.writer.close()
+            await self.writer.wait_closed()
+
     async def send_pass_and_nick(self):
         self.writer.write(f"PASS oauth:{self.oauth_token}\n".encode("utf-8"))
         self.writer.write(f"NICK {self.channel_username}\n".encode("utf-8"))
@@ -79,19 +84,3 @@ class TwitchChatClient:
                 else:
                     print(f"Token validation failed: {resp.status}")
                     return False
-
-    async def update_token_and_channel(self, new_token, new_channel):
-        self.oauth_token = new_token
-        self.channel_username = new_channel
-        self.channel = f"#{new_channel}"
-        print(f"channel: {self.channel}, channel_username: {self.channel_username}, oauth_token: {self.oauth_token}")
-        valid_token = await self.is_token_valid()
-        if not valid_token:
-            print("Invalid token")
-            return
-
-        if self.writer:
-            self.writer.close()
-            await self.writer.wait_closed()
-
-        await self.connect_to_chat()
