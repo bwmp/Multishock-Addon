@@ -1,7 +1,9 @@
 import asyncio
 from multishock_client import MultiShockClient
 
-if __name__ == "__main__":
-    multishockClient = MultiShockClient()
+async def main():
+    multishock_client = MultiShockClient()
+    await multishock_client.connect_to_wss()
 
-    asyncio.run(multishockClient.connect_to_wss())
+if __name__ == "__main__":
+    asyncio.run(main())

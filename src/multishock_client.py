@@ -12,7 +12,6 @@ class MultiShockClient:
         self.twitchChatClient: TwitchChatClient = None
         self.websocket = None
         self.stop_event = threading.Event()
-        self.loop = asyncio.get_event_loop()
 
     async def on_message(self, message: str):
         print(f"Received message: {message}")
@@ -23,7 +22,7 @@ class MultiShockClient:
             return
         cmd = data.get("cmd")
         args = data.get("value")
-        print(f"Received command: {cmd} with args: {args}")
+        print(f"Recieved command: {cmd} with args: {args}")
         if cmd == "update_credentials":
             username = args.get("username")
             token = args.get("oauth_token")
@@ -35,10 +34,6 @@ class MultiShockClient:
 
     async def on_disconnect(self):
         print("Disconnected from WebSocket")
-
-    def update_tokens_and_channels_threadsafe(self, new_token, new_channel):
-        future = asyncio.run_coroutine_threadsafe(self.update_tokens_and_channels(new_token, new_channel), self.loop)
-        future.result()  # Wait for the coroutine to complete
 
     async def update_tokens_and_channels(self, new_token, new_channel):
         if self.twitchClient is not None:
@@ -57,23 +52,18 @@ class MultiShockClient:
         self.twitchClient.multishockClient = self
         self.twitchChatClient.multishockClient = self
         
-        twitch_client_thread = threading.Thread(target=self.run_twitch_client)
-        twitch_chat_client_thread = threading.Thread(target=self.run_twitch_chat_client)
+        loop = asyncio.get_event_loop()
+
+        twitch_client_thread = threading.Thread(target=lambda: loop.run_until_complete(self.twitchClient.connect_to_wss()))
+        twitch_chat_client_thread = threading.Thread(target=lambda: loop.run_until_complete(self.twitchChatClient.connect_to_chat()))
 
         twitch_client_thread.start()
         twitch_chat_client_thread.start()
 
-    def run_twitch_client(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.twitchClient.connect_to_wss())
-        loop.run_forever()
-
-    def run_twitch_chat_client(self):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(self.twitchChatClient.connect_to_chat())
-        loop.run_forever()
+        twitch_client_thread.join()
+        twitch_chat_client_thread.join()
+        
+        print("Reconnected to TwitchClient and TwitchChatClient")
 
     def construct_payload(self, command, value):
         return json.dumps({"cmd": command, "value": value})
@@ -95,3 +85,10 @@ class MultiShockClient:
 
     async def send_message(self, message: str):
         await self.websocket.send(message)
+
+
+# Create an instance of MultiShockClient and run the WebSocket client
+multishock_client = MultiShockClient()
+
+# Start the WebSocket client in the main thread
+asyncio.run(multishock_client.connect_to_wss())
