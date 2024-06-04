@@ -1,19 +1,40 @@
 import asyncio
 import json
 import aiohttp
+import threading
 
-
-class TwitchChatClient:
+class TwitchChatClient(threading.Thread):
     server = "irc.chat.twitch.tv"
     port = 6667
 
     def __init__(self, oauth_token, channel_username):
+        super().__init__()
         self.client_id = "2usq7xnhsujju3ezja2nzb5j7vtd84"
         self.oauth_token = oauth_token
         self.channel_username = channel_username
         self.channel = f"#{channel_username}"
         self.writer = None
+        self.running = False
+        self.loop = None
         self.multishockClient = None
+
+    def run(self):
+        self.running = True
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.connect_to_chat())
+
+    def stop(self):
+        self.running = False
+        self.loop.run_until_complete(self.close())
+        self.loop.stop()
+
+    def update_credentials(self, oauth_token, channel_username):
+        self.oauth_token = oauth_token
+        self.channel_username = channel_username
+        self.channel = f"#{channel_username}"
+        if self.running:
+            self.loop.run_until_complete(self.reconnect_to_chat())
 
     async def connect_to_chat(self):
         reader, writer = await asyncio.open_connection(self.server, self.port)
@@ -21,6 +42,10 @@ class TwitchChatClient:
         await self.send_pass_and_nick()
         await self.join_channel()
         await self.listen_to_chat(reader)
+
+    async def reconnect_to_chat(self):
+        await self.close()
+        await self.connect_to_chat()
 
     async def close(self):
         if self.writer:
@@ -43,7 +68,7 @@ class TwitchChatClient:
         print(f"Sent message: {message}")
 
     async def listen_to_chat(self, reader: asyncio.StreamReader):
-        while True:
+        while self.running:
             response = await reader.read(2048)
             response = response.decode("utf-8")
 
@@ -52,6 +77,8 @@ class TwitchChatClient:
                 await self.writer.drain()
             elif response != "":
                 parts = response.split(":", 2)
+                if len(parts) < 3:
+                    continue
                 payload = self.construct_payload(
                     "chat_message",
                     {

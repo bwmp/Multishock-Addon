@@ -6,4 +6,8 @@ async def main():
     await multishock_client.connect_to_wss()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Exiting...")
+        exit()

@@ -26,43 +26,30 @@ class MultiShockClient:
         if cmd == "update_credentials":
             username = args.get("username")
             token = args.get("oauth_token")
-            await self.update_tokens_and_channels(token, username)
+            self.update_tokens_and_channels(token, username)
         elif cmd == "send_message":
             message = args.get("message")
             print(f"Sending message: {message}")
             await self.twitchChatClient.send_message(message)
 
     async def on_disconnect(self):
-        print("Disconnected from WebSocket")
+        print("Disconnected from MultiShock WebSocket")
+        exit()
 
-    async def update_tokens_and_channels(self, new_token, new_channel):
-        if self.twitchClient is not None:
-            if self.twitchClient.websocket is not None:
-                await self.twitchClient.websocket.close()
-                print("Closed TwitchClient WebSocket")
-        
-        if self.twitchChatClient is not None:
-            if self.twitchChatClient.writer is not None:
-                self.twitchChatClient.writer.close()
-                await self.twitchChatClient.writer.wait_closed()
-                print("Closed TwitchChatClient Writer")
-        
-        self.twitchClient = TwitchClient(new_token, new_channel, debug=True)
-        self.twitchChatClient = TwitchChatClient(new_token, new_channel)
-        self.twitchClient.multishockClient = self
-        self.twitchChatClient.multishockClient = self
-        
-        loop = asyncio.get_event_loop()
-
-        twitch_client_thread = threading.Thread(target=lambda: loop.run_until_complete(self.twitchClient.connect_to_wss()))
-        twitch_chat_client_thread = threading.Thread(target=lambda: loop.run_until_complete(self.twitchChatClient.connect_to_chat()))
-
-        twitch_client_thread.start()
-        twitch_chat_client_thread.start()
-
-        twitch_client_thread.join()
-        twitch_chat_client_thread.join()
-        
+    def update_tokens_and_channels(self, new_token, new_channel):
+        print("Reconnecting to TwitchClient and TwitchChatClient")
+        if self.twitchClient is None:
+            self.twitchClient = TwitchClient(new_token, new_channel, debug=True)
+            self.twitchClient.multishockClient = self
+            self.twitchClient.start()
+        else:
+            self.twitchClient.update_credentials(new_token, new_channel)
+        if self.twitchChatClient is None:
+            self.twitchChatClient = TwitchChatClient(new_token, new_channel)
+            self.twitchChatClient.multishockClient = self
+            self.twitchChatClient.start()
+        else:
+            self.twitchChatClient.update_credentials(new_token, new_channel)
         print("Reconnected to TwitchClient and TwitchChatClient")
 
     def construct_payload(self, command, value):
@@ -85,10 +72,3 @@ class MultiShockClient:
 
     async def send_message(self, message: str):
         await self.websocket.send(message)
-
-
-# Create an instance of MultiShockClient and run the WebSocket client
-multishock_client = MultiShockClient()
-
-# Start the WebSocket client in the main thread
-asyncio.run(multishock_client.connect_to_wss())

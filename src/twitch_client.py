@@ -3,14 +3,16 @@ import json
 import time
 import aiohttp
 import websockets
+import threading
 
-class TwitchClient:
+class TwitchClient(threading.Thread):
     subscription_url = "https://api.twitch.tv/helix/eventsub/subscriptions"
     websocket_url = "wss://eventsub.wss.twitch.tv/ws"
     debug_subscription_url = "http://localhost:8080/eventsub/subscriptions"
     debug_websocket_url = "ws://localhost:8080/ws"
 
     def __init__(self, oauth_token, channel_username, debug=False):
+        super().__init__()
         self.client_id = "2usq7xnhsujju3ezja2nzb5j7vtd84"
         self.oauth_token = oauth_token
         self.channel_username = channel_username
@@ -25,6 +27,20 @@ class TwitchClient:
         self.multishockClient = None
         self.running = False
         self.websocket = None
+
+    def run(self):
+        self.running = True
+        asyncio.run(self.connect_to_wss())
+
+    def stop(self):
+        self.running = False
+        asyncio.run(self.close())
+
+    def update_credentials(self, oauth_token, channel_username):
+        self.oauth_token = oauth_token
+        self.channel_username = channel_username
+        if self.running:
+            asyncio.run(self.reconnect_to_wss())
 
     async def connect_to_wss(self):
         uri = self.websocket_url
@@ -45,7 +61,7 @@ class TwitchClient:
             await self.websocket.close()
 
     async def reconnect_to_wss(self):
-        await self.websocket.close()
+        await self.close()
         await self.connect_to_wss()
         print("reconnected to websocket")
 
@@ -81,7 +97,7 @@ class TwitchClient:
             await self.multishockClient.send_message(json.dumps(multishock_payload))
 
     async def on_disconnect(self):
-        print("disconnected from websocket")
+        print("Disconnected from Twitch WebSocket")
 
     async def subscribe_to_eventsub(self, event_type):
         if self.reconnection:
