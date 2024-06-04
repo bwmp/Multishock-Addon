@@ -1,40 +1,41 @@
 import asyncio
 import json
-import aiohttp
 import threading
+import aiohttp
 
-class TwitchChatClient(threading.Thread):
+class TwitchChatClient:
     server = "irc.chat.twitch.tv"
     port = 6667
 
-    def __init__(self, oauth_token, channel_username):
-        super().__init__()
+    def __init__(self, oauth_token, channel_username, event_loop):
         self.client_id = "2usq7xnhsujju3ezja2nzb5j7vtd84"
         self.oauth_token = oauth_token
         self.channel_username = channel_username
         self.channel = f"#{channel_username}"
         self.writer = None
         self.running = False
-        self.loop = None
+        self.loop = event_loop
         self.multishockClient = None
 
-    def run(self):
+    def start(self):
         self.running = True
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self.connect_to_chat())
+        self.thread = threading.Thread(target=self.run_loop)
+        self.thread.start()
 
-    def stop(self):
+    def run_loop(self):
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        asyncio.get_event_loop().run_until_complete(self.connect_to_chat())
+
+    async def stop(self):
         self.running = False
-        self.loop.run_until_complete(self.close())
-        self.loop.stop()
+        await self.close()
 
     def update_credentials(self, oauth_token, channel_username):
         self.oauth_token = oauth_token
         self.channel_username = channel_username
         self.channel = f"#{channel_username}"
         if self.running:
-            self.loop.run_until_complete(self.reconnect_to_chat())
+            self.loop.create_task(self.reconnect_to_chat())
 
     async def connect_to_chat(self):
         reader, writer = await asyncio.open_connection(self.server, self.port)

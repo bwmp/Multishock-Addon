@@ -1,18 +1,17 @@
 import asyncio
 import json
+import threading
 import time
 import aiohttp
 import websockets
-import threading
 
-class TwitchClient(threading.Thread):
+class TwitchClient:
     subscription_url = "https://api.twitch.tv/helix/eventsub/subscriptions"
     websocket_url = "wss://eventsub.wss.twitch.tv/ws"
     debug_subscription_url = "http://localhost:8080/eventsub/subscriptions"
     debug_websocket_url = "ws://localhost:8080/ws"
 
-    def __init__(self, oauth_token, channel_username, debug=False):
-        super().__init__()
+    def __init__(self, oauth_token, channel_username, event_loop, debug=False):
         self.client_id = "2usq7xnhsujju3ezja2nzb5j7vtd84"
         self.oauth_token = oauth_token
         self.channel_username = channel_username
@@ -27,20 +26,26 @@ class TwitchClient(threading.Thread):
         self.multishockClient = None
         self.running = False
         self.websocket = None
+        self.event_loop: asyncio.AbstractEventLoop = event_loop
 
-    def run(self):
+    def start(self):
         self.running = True
-        asyncio.run(self.connect_to_wss())
+        self.thread = threading.Thread(target=self.run_loop)
+        self.thread.start()
 
-    def stop(self):
+    def run_loop(self):
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        asyncio.get_event_loop().run_until_complete(self.connect_to_wss())
+
+    async def stop(self):
         self.running = False
-        asyncio.run(self.close())
+        await self.close()
 
-    def update_credentials(self, oauth_token, channel_username):
+    async def update_credentials(self, oauth_token, channel_username):
         self.oauth_token = oauth_token
         self.channel_username = channel_username
         if self.running:
-            asyncio.run(self.reconnect_to_wss())
+            await self.reconnect_to_wss()
 
     async def connect_to_wss(self):
         uri = self.websocket_url
@@ -58,7 +63,7 @@ class TwitchClient(threading.Thread):
 
     async def close(self):
         if self.websocket:
-            await self.websocket.close()
+            await self.event_loop.run_in_executor(None, self.websocket.close)
 
     async def reconnect_to_wss(self):
         await self.close()
@@ -66,7 +71,7 @@ class TwitchClient(threading.Thread):
         print("reconnected to websocket")
 
     async def listen_to_websocket(self):
-        while True:
+        while self.running:
             message = await self.websocket.recv()
             await self.on_message(message)
 
@@ -96,8 +101,13 @@ class TwitchClient(threading.Thread):
             }
             await self.multishockClient.send_message(json.dumps(multishock_payload))
 
+    async def close_websocket(self):
+        if self.websocket:
+            await self.websocket.close()
+
     async def on_disconnect(self):
         print("Disconnected from Twitch WebSocket")
+        await self.close_websocket()
 
     async def subscribe_to_eventsub(self, event_type):
         if self.reconnection:
