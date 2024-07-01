@@ -1,7 +1,4 @@
-import asyncio
 import json
-import threading
-import time
 import aiohttp
 import websockets
 
@@ -11,11 +8,13 @@ class TwitchClient:
     debug_subscription_url = "http://localhost:8080/eventsub/subscriptions"
     debug_websocket_url = "ws://localhost:8080/ws"
 
-    def __init__(self, oauth_token, channel_username, event_loop, debug=False):
-        self.client_id = "2usq7xnhsujju3ezja2nzb5j7vtd84"
+    def __init__(
+        self, oauth_token, channel_username, client_id, channel_id, debug=False
+    ):
+        self.client_id = client_id
         self.oauth_token = oauth_token
         self.channel_username = channel_username
-        self.channel_id = None
+        self.channel_id = channel_id
         self.session_id = None
         self.debug = debug
         self.reconnection = False
@@ -26,16 +25,6 @@ class TwitchClient:
         self.multishockClient = None
         self.running = False
         self.websocket = None
-        self.event_loop: asyncio.AbstractEventLoop = event_loop
-
-    def start(self):
-        self.running = True
-        self.thread = threading.Thread(target=self.run_loop)
-        self.thread.start()
-
-    def run_loop(self):
-        asyncio.set_event_loop(asyncio.new_event_loop())
-        asyncio.get_event_loop().run_until_complete(self.connect_to_wss())
 
     async def stop(self):
         self.running = False
@@ -49,57 +38,73 @@ class TwitchClient:
 
     async def connect_to_wss(self):
         uri = self.websocket_url
-        self.channel_id = await self.get_channel_id()
-        valid_token, expiration_timestamp = await self.is_token_valid()
-        if not valid_token:
-            return
+        self.running = True
         try:
             async with websockets.connect(uri) as websocket:
                 self.websocket = websocket
-                print("connected to websocket")
+                print("Connected to Twitch WebSocket")
                 await self.listen_to_websocket()
-        except websockets.ConnectionClosed:
+        except websockets.ConnectionClosed as e:
             await self.on_disconnect()
+            await self.report_error(f"WebSocket connection closed: {e}")
+        except ConnectionRefusedError as e:
+            await self.report_error(f"Cannot connect to Twitch WebSocket: {e}")
 
     async def close(self):
         if self.websocket:
-            await self.event_loop.run_in_executor(None, self.websocket.close)
+            await self.websocket.close()
 
     async def reconnect_to_wss(self):
         await self.close()
         await self.connect_to_wss()
-        print("reconnected to websocket")
+        print("Reconnected to Twitch WebSocket")
 
     async def listen_to_websocket(self):
         while self.running:
-            message = await self.websocket.recv()
-            await self.on_message(message)
+            try:
+                message = await self.websocket.recv()
+                await self.on_message(message)
+            except websockets.ConnectionClosed as e:
+                await self.on_disconnect()
+                await self.report_error(f"WebSocket connection closed: {e}")
+                break
+            except Exception as e:
+                await self.report_error(f"Unexpected error in listen_to_websocket: {e}")
+                break
 
     async def on_message(self, message: str):
-        parsed_message = json.loads(message)
-        message_type = parsed_message.get("metadata", {}).get("message_type")
-        payload = parsed_message.get("payload", {})
-        if message_type == "session_keepalive":
-            return
-        if message_type == "session_welcome":
-            self.session_id = payload.get("session", {}).get("id")
-            await self.subscribe_to_eventsub(
-                "channel.channel_points_custom_reward_redemption.add"
-            )
-            await self.subscribe_to_eventsub("channel.cheer")
-            await self.subscribe_to_eventsub("channel.subscribe")
-            await self.subscribe_to_eventsub("channel.subscription.gift")
-        elif message_type == "session_reconnect":
-            print("reconnecting...")
-            self.websocket_url = payload.get("session", {}).get("reconnect_url")
-            self.reconnection = True
-            await self.reconnect_to_wss()
-        elif message_type == "notification":
-            multishock_payload = {
-                "cmd": payload.get("subscription").get("type"),
-                "value": payload.get("event"),
-            }
-            await self.multishockClient.send_message(json.dumps(multishock_payload))
+        try:
+            parsed_message = json.loads(message)
+            message_type = parsed_message.get("metadata", {}).get("message_type")
+            payload = parsed_message.get("payload", {})
+            if message_type == "session_keepalive":
+                return
+            if message_type == "session_welcome":
+                self.session_id = payload.get("session", {}).get("id")
+                await self.subscribe_to_eventsub(
+                    "channel.channel_points_custom_reward_redemption.add"
+                )
+                await self.subscribe_to_eventsub("channel.cheer")
+                await self.subscribe_to_eventsub("channel.subscribe")
+                await self.subscribe_to_eventsub("channel.subscription.gift")
+                await self.subscribe_to_eventsub("channel.follow")
+                await self.subscribe_to_eventsub("channel.raid")
+                await self.subscribe_to_eventsub("channel.hype_train.begin")
+                await self.subscribe_to_eventsub("channel.hype_train.progress")
+                await self.subscribe_to_eventsub("channel.hype_train.end")
+            elif message_type == "session_reconnect":
+                print("reconnecting...")
+                self.websocket_url = payload.get("session", {}).get("reconnect_url")
+                self.reconnection = True
+                await self.reconnect_to_wss()
+            elif message_type == "notification":
+                multishock_payload = {
+                    "cmd": payload.get("subscription").get("type"),
+                    "value": payload.get("event"),
+                }
+                await self.multishockClient.send_message(json.dumps(multishock_payload))
+        except Exception as e:
+            await self.report_error(f"Error processing message: {e}")
 
     async def close_websocket(self):
         if self.websocket:
@@ -108,6 +113,7 @@ class TwitchClient:
     async def on_disconnect(self):
         print("Disconnected from Twitch WebSocket")
         await self.close_websocket()
+        await self.report_error("Disconnected from Twitch WebSocket")
 
     async def subscribe_to_eventsub(self, event_type):
         if self.reconnection:
@@ -117,57 +123,72 @@ class TwitchClient:
             "Authorization": f"Bearer {self.oauth_token}",
             "Content-Type": "application/json",
         }
+
+        event_conditions = {
+            "channel.cheer": {"broadcaster_user_id": self.channel_id},
+            "channel.subscribe": {"broadcaster_user_id": self.channel_id},
+            "channel.subscription.gift": {"broadcaster_user_id": self.channel_id},
+            "channel.follow": {"broadcaster_user_id": self.channel_id, "moderator_user_id": self.channel_id},
+            "channel.hype_train.begin": {"broadcaster_user_id": self.channel_id},
+            "channel.hype_train.progress": {"broadcaster_user_id": self.channel_id},
+            "channel.hype_train.end": {"broadcaster_user_id": self.channel_id},
+            "channel.raid": {"to_broadcaster_user_id": self.channel_id},
+        }
+        
+        versions = {
+            "channel.cheer": "1",
+            "channel.subscribe": "1",
+            "channel.subscription.gift": "1",
+            "channel.follow": "2",
+            "channel.raid": "1",
+            "channel.hype_train.begin": "1",
+            "channel.hype_train.progress": "1",
+            "channel.hype_train.end": "1",
+        }
+
+        condition = event_conditions.get(
+            event_type, {"broadcaster_user_id": self.channel_id}
+        )
+        
+        version = versions.get(event_type, "1")
+
         payload = {
             "type": event_type,
-            "version": "1",
-            "condition": {
-                "broadcaster_user_id": self.channel_id,
-            },
+            "version": version,
+            "condition": condition,
             "transport": {
                 "method": "websocket",
                 "session_id": self.session_id,
             },
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                self.debug and self.debug_subscription_url or self.subscription_url,
-                headers=headers,
-                json=payload,
-            ) as resp:
-                print("got response", resp.status)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    self.debug and self.debug_subscription_url or self.subscription_url,
+                    headers=headers,
+                    json=payload,
+                ) as resp:
+                    multishock_payload = {
+                        "cmd": "notification",
+                        "value": {
+                            "type": event_type,
+                            "response_status": resp.status,
+                            "response_text": await resp.text(),
+                        },
+                    }
+                    await self.multishockClient.send_message(json.dumps(multishock_payload))
+        except Exception as e:
+            await self.report_error(f"Error subscribing to event {event_type}: {e}")
 
-    async def is_token_valid(self):
-        url = f"https://id.twitch.tv/oauth2/validate"
-        headers = {"Authorization": f"Bearer {self.oauth_token}"}
+    async def report_error(self, error_message: str):
+        payload = self.construct_payload(
+            "error",
+            {
+                "message": error_message,
+            },
+        )
+        await self.multishockClient.send_message(payload)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status == 200:
-                    response_json = await resp.json()
-                    if "expires_in" in response_json:
-                        expiration_timestamp = time.time() + response_json["expires_in"]
-                        self.expires_at = expiration_timestamp
-                        return True, expiration_timestamp
-                    else:
-                        return False, None
-                else:
-                    return False, None
-
-    async def get_channel_id(self):
-        token_valid, expiration_timestamp = await self.is_token_valid()
-        if not token_valid:
-            return None
-        headers = {
-            "Client-ID": self.client_id,
-            "Authorization": f"Bearer {self.oauth_token}",
-        }
-        params = {"login": self.channel_username}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                "https://api.twitch.tv/helix/users", headers=headers, params=params
-            ) as resp:
-                data = await resp.json()
-                self.channel_id = data["data"][0]["id"]
-                return self.channel_id
+    def construct_payload(self, command, value):
+        return json.dumps({"cmd": command, "value": value})
