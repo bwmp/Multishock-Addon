@@ -3,4 +3,3 @@ dist/*
 src/__pycache__/*
 *.spec
 nodemon.json
-nodemon.json
